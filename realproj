@@ -1,0 +1,94 @@
+// app.js
+const express = require('express');
+const mysql = require('mysql2/promise');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const cors = require('cors');
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+// DB Connection
+const db = mysql.createPool({
+  host: 'localhost',
+  user: 'root',
+  password: 'password',   // change to your MySQL password
+  database: 'food_ordering'
+});
+
+// ------------------ AUTH ------------------
+
+// Register
+app.post('/auth/register', async (req,res)=>{
+  const { name, email, password } = req.body;
+  const hashed = await bcrypt.hash(password, 10);
+  await db.query("INSERT INTO users (name,email,password,role) VALUES (?,?,?,?)",
+    [name,email,hashed,'customer']);
+  res.json({ message:"User registered" });
+});
+
+// Login
+app.post('/auth/login', async (req,res)=>{
+  const { email, password } = req.body;
+  const [rows] = await db.query("SELECT * FROM users WHERE email=?", [email]);
+  const user = rows[0];
+  if(user && await bcrypt.compare(password,user.password)){
+    const token = jwt.sign({ id:user.id, role:user.role }, "secretkey");
+    res.json({ token });
+  } else {
+    res.status(401).json({ error:"Invalid credentials" });
+  }
+});
+
+// ------------------ PRODUCTS ------------------
+
+// Get products with search & pagination
+app.get('/products', async (req,res)=>{
+  const { search="", page=1, limit=10 } = req.query;
+  const offset = (page-1)*limit;
+  const [rows] = await db.query(
+    "SELECT * FROM products WHERE name LIKE ? LIMIT ? OFFSET ?",
+    [`%${search}%`, parseInt(limit), offset]
+  );
+  res.json(rows);
+});
+
+// Add product
+app.post('/products', async (req,res)=>{
+  const { name, price, category } = req.body;
+  await db.query("INSERT INTO products (name,price,category) VALUES (?,?,?)",
+    [name,price,category]);
+  res.json({ message:"Product added" });
+});
+
+// ------------------ ORDERS ------------------
+
+// Place order
+app.post('/orders', async (req,res)=>{
+  const { user_id, product_id, quantity } = req.body;
+  await db.query("INSERT INTO orders (user_id,product_id,quantity,status) VALUES (?,?,?,?)",
+    [user_id,product_id,quantity,'pending']);
+  res.json({ message:"Order placed" });
+});
+
+// ------------------ ANALYTICS ------------------
+
+// Orders per day
+app.get('/analytics/orders', async (req,res)=>{
+  const [rows] = await db.query(
+    "SELECT DATE(created_at) as day, COUNT(*) as total FROM orders GROUP BY day"
+  );
+  res.json(rows);
+});
+
+// Active users (last 7 days)
+app.get('/analytics/users', async (req,res)=>{
+  const [rows] = await db.query(
+    "SELECT COUNT(DISTINCT user_id) as active_users FROM orders WHERE created_at >= NOW() - INTERVAL 7 DAY"
+  );
+  res.json(rows);
+});
+
+// ------------------ SERVER ------------------
+app.listen(5000, ()=> console.log("Server running on http://localhost:5000"));
